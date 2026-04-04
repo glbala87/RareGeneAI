@@ -1,0 +1,46 @@
+# RareGeneAI Docker Compose
+version: "3.8"
+
+services:
+  # Core pipeline
+  raregeneai:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ./output:/app/output
+    environment:
+      - RAREGENEAI_LOG_LEVEL=INFO
+
+  # Web API
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "uvicorn", "raregeneai.ui.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Streamlit UI
+  ui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "streamlit", "run", "raregeneai/ui/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+    depends_on:
+      - api

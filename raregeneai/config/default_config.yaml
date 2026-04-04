@@ -1,0 +1,123 @@
+# ═══════════════════════════════════════════════════════════════
+# RareGeneAI Pipeline Configuration — Full Reference
+# ═══════════════════════════════════════════════════════════════
+
+genome_build: GRCh38
+n_threads: 4
+log_level: INFO
+include_noncoding: true
+
+# ── Data Ingestion ─────────────────────────────────────────────
+ingestion:
+  min_gq: 20
+  min_dp: 10
+  split_multiallelic: true
+  left_align: true
+  output_format: parquet
+
+# ── Variant Annotation ─────────────────────────────────────────
+annotation:
+  vep_assembly: GRCh38
+  use_remote_api: true
+  batch_size: 1000
+
+  # Population-specific frequency (QGP, GME, local)
+  population:
+    enabled: true
+    population: ""                    # Set to "QGP", "GME", etc.
+    # qgp_af_path: data/reference/qgp_af.tsv
+    # gme_af_path: data/reference/gme_af.tsv
+    founder_enrichment_threshold: 10.0
+    founder_local_af_min: 0.001
+    founder_global_af_max: 0.001
+
+  # Non-coding regulatory annotation
+  regulatory:
+    enabled: true
+    spliceai_high_threshold: 0.5
+    spliceai_moderate_threshold: 0.2
+    abc_score_threshold: 0.015
+    eqtl_pvalue_threshold: 5.0e-8
+    w_splicing: 0.30
+    w_regulatory_region: 0.20
+    w_conservation: 0.15
+    w_deep_learning: 0.20
+    w_gene_mapping: 0.15
+
+# ── Phenotype Matching ─────────────────────────────────────────
+phenotype:
+  similarity_method: resnik           # resnik | lin | jc
+  ic_method: annotation
+  min_phenotype_score: 0.1
+
+# ── Variant Scoring ────────────────────────────────────────────
+scoring:
+  w_pathogenicity: 0.30
+  w_rarity: 0.20
+  w_functional_impact: 0.15
+  w_phenotype: 0.15
+  w_inheritance: 0.05
+  w_regulatory: 0.15
+  gnomad_af_threshold: 0.01
+  cadd_phred_threshold: 15.0
+  revel_threshold: 0.5
+
+# ── Gene Ranking ───────────────────────────────────────────────
+ranking:
+  model_type: rule_based              # rule_based | xgboost | lightgbm
+  # pretrained_model_path: models/ranking_v1.pkl
+  n_estimators: 500
+  max_depth: 6
+  learning_rate: 0.05
+  top_n_genes: 50
+
+# ── Structural Variants ───────────────────────────────────────
+sv:
+  enabled: true
+  min_sv_size: 50
+  max_sv_size: 100000000
+  min_sv_quality: 5.0
+  min_support_reads: 3
+  gnomad_sv_af_threshold: 0.01
+  w_sv_gene_overlap: 0.30
+  w_sv_dosage: 0.25
+  w_sv_rarity: 0.20
+  w_sv_regulatory: 0.15
+  w_sv_clinical: 0.10
+
+# ── Multi-omics Integration ───────────────────────────────────
+multiomics:
+  enabled: true
+  z_score_threshold: 2.0
+  z_score_strong_threshold: 3.0
+  delta_beta_threshold: 0.2
+  dmr_pvalue_threshold: 0.05
+  min_cpgs_per_dmr: 3
+  w_expression: 0.35
+  w_methylation: 0.25
+  w_concordance: 0.25
+  w_layer_count: 0.15
+  concordance_multiplier: 1.3
+  multiomics_weight_in_ranking: 0.12
+
+# ── Knowledge Graph ────────────────────────────────────────────
+knowledge_graph:
+  enabled: true
+  algorithm: rwr                      # rwr | pagerank | diffusion
+  restart_probability: 0.4
+  max_iterations: 100
+  convergence_threshold: 1.0e-6
+  w_gene_phenotype: 1.0
+  w_gene_disease: 0.8
+  w_disease_phenotype: 0.7
+  w_ppi: 0.5
+  w_pathway: 0.4
+  kg_weight_in_ranking: 0.10
+
+# ── Clinical Report ────────────────────────────────────────────
+report:
+  output_format: html                 # html | pdf
+  include_acmg: true
+  include_evidence_summary: true
+  lab_name: "Clinical Genomics Laboratory"
+  report_version: "1.0"

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RareGeneAI Clinical Report - {{ report.patient_id }}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #2c3e50; line-height: 1.6; }
+
+        .header { background: linear-gradient(135deg, #1a5276, #2e86c1); color: white; padding: 30px 40px; }
+        .header h1 { font-size: 1.8em; margin-bottom: 5px; }
+        .header p { opacity: 0.9; font-size: 0.95em; }
+
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px 40px; }
+
+        .meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin: 25px 0;
+                     background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #e9ecef; }
+        .meta-item { padding: 8px; }
+        .meta-label { font-size: 0.8em; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.5px; }
+        .meta-value { font-size: 1.1em; font-weight: 600; color: #2c3e50; }
+
+        h2 { color: #1a5276; margin: 30px 0 15px; padding-bottom: 8px; border-bottom: 2px solid #e9ecef; }
+
+        .hpo-tags { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+        .hpo-tag { background: #ebf5fb; border: 1px solid #aed6f1; border-radius: 20px;
+                   padding: 4px 12px; font-size: 0.85em; color: #2e86c1; }
+
+        .gene-card { border: 1px solid #ddd; border-radius: 10px; margin: 20px 0; overflow: hidden;
+                     box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .gene-header { background: #f8f9fa; padding: 15px 20px; display: flex;
+                       justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; }
+        .gene-header h3 { color: #1a5276; font-size: 1.2em; }
+        .gene-badges { display: flex; gap: 8px; }
+        .badge { padding: 3px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; }
+        .badge-score { background: #e74c3c; color: white; }
+        .badge-confidence { background: #27ae60; color: white; }
+        .badge-phenotype { background: #8e44ad; color: white; }
+
+        .gene-body { padding: 15px 20px; }
+        .explanation { background: #fafafa; border-left: 3px solid #3498db; padding: 12px 15px;
+                       margin: 10px 0; font-size: 0.88em; white-space: pre-wrap; font-family: monospace; }
+
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.85em; }
+        thead th { background: #34495e; color: white; padding: 10px 8px; text-align: left;
+                   font-weight: 500; font-size: 0.85em; text-transform: uppercase; }
+        tbody td { padding: 8px; border-bottom: 1px solid #eee; }
+        tbody tr:hover { background: #f5f5f5; }
+        .impact-high { color: #e74c3c; font-weight: 600; }
+        .impact-moderate { color: #e67e22; font-weight: 600; }
+        .impact-low { color: #27ae60; }
+
+        .footer { margin-top: 40px; padding: 20px; background: #f8f9fa; border-radius: 8px;
+                  border: 1px solid #e9ecef; font-size: 0.85em; color: #666; }
+
+        @media print {
+            .header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .gene-card { break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>RareGeneAI Clinical Report</h1>
+        <p>{{ lab_name }} &mdash; Rare Disease Gene Prioritization Analysis</p>
+    </div>
+
+    <div class="container">
+        <div class="meta-grid">
+            <div class="meta-item">
+                <div class="meta-label">Patient ID</div>
+                <div class="meta-value">{{ report.patient_id }}</div>
+            </div>
+            <div class="meta-item">
+                <div class="meta-label">Report ID</div>
+                <div class="meta-value">{{ report.report_id }}</div>
+            </div>
+            <div class="meta-item">
+                <div class="meta-label">Report Date</div>
+                <div class="meta-value">{{ report.report_date }}</div>
+            </div>
+            <div class="meta-item">
+                <div class="meta-label">Genome Build</div>
+                <div class="meta-value">{{ report.genome_build }}</div>
+            </div>
+            <div class="meta-item">
+                <div class="meta-label">Variants Analyzed</div>
+                <div class="meta-value">{{ report.total_variants_analyzed }}</div>
+            </div>
+            <div class="meta-item">
+                <div class="meta-label">Genes Analyzed</div>
+                <div class="meta-value">{{ report.total_genes_analyzed }}</div>
+            </div>
+        </div>
+
+        <h2>Clinical Phenotype</h2>
+        <div class="hpo-tags">
+            {% for term in report.phenotype.hpo_terms %}
+            <span class="hpo-tag">{{ term.id }} &mdash; {{ term.name }}</span>
+            {% endfor %}
+        </div>
+        <p style="margin-top: 10px; color: #666;">
+            <strong>Sex:</strong> {{ report.phenotype.sex or 'Not specified' }} |
+            <strong>Age of Onset:</strong> {{ report.phenotype.age_of_onset or 'Not specified' }}
+        </p>
+
+        <h2>Candidate Genes (Ranked by Priority)</h2>
+
+        {% for gene in report.ranked_genes[:20] %}
+        <div class="gene-card">
+            <div class="gene-header">
+                <h3>#{{ loop.index }}. {{ gene.gene_symbol }}</h3>
+                <div class="gene-badges">
+                    <span class="badge badge-score">Score: {{ "%.3f"|format(gene.gene_rank_score) }}</span>
+                    <span class="badge badge-confidence">Confidence: {{ "%.0f"|format(gene.confidence * 100) }}%</span>
+                    <span class="badge badge-phenotype">Phenotype: {{ "%.3f"|format(gene.phenotype_score) }}</span>
+                </div>
+            </div>
+            <div class="gene-body">
+                {% if gene.explanation %}
+                <div class="explanation">{{ gene.explanation }}</div>
+                {% endif %}
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Variant</th>
+                            <th>Protein Change</th>
+                            <th>Consequence</th>
+                            <th>Impact</th>
+                            <th>gnomAD AF</th>
+                            <th>CADD</th>
+                            <th>ClinVar</th>
+                            <th>Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for var in gene.variants[:5] %}
+                        <tr>
+                            <td>{{ var.variant.variant_key }}</td>
+                            <td>{{ var.hgvs_p or var.hgvs_c or '-' }}</td>
+                            <td>{{ var.consequence }}</td>
+                            <td class="impact-{{ var.impact.value|lower }}">{{ var.impact.value }}</td>
+                            <td>{{ "%.2e"|format(var.gnomad_af) if var.gnomad_af else 'Novel' }}</td>
+                            <td>{{ "%.1f"|format(var.cadd_phred) if var.cadd_phred else '-' }}</td>
+                            <td>{{ var.clinvar_significance or '-' }}</td>
+                            <td>{{ "%.3f"|format(var.composite_score) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="footer">
+            <p><strong>Disclaimer:</strong> This report is generated by RareGeneAI v{{ report.pipeline_version }}
+            and is intended to assist clinical decision-making. All findings should be confirmed through
+            independent validation methods and interpreted by qualified clinical geneticists in accordance
+            with professional guidelines (ACMG/AMP).</p>
+            <p style="margin-top: 10px;">
+                Pipeline: RareGeneAI v{{ report.pipeline_version }} |
+                Report version: {{ report_version }} |
+                Generated: {{ report.report_date }}
+            </p>
+        </div>
+    </div>
+</body>
+</html>
