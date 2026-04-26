@@ -1,46 +1,125 @@
-# RareGeneAI Docker Compose
-version: "3.8"
+# RareGeneAI Docker Compose - Production
+# ========================================
+# Includes: PostgreSQL, API, UI with security hardening
 
 services:
-  # Core pipeline
+  # ── PostgreSQL Database ─────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-raregeneai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-raregeneai}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"  # Only bind to localhost
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raregeneai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    networks:
+      - backend
+
+  # ── Core pipeline (CLI) ────────────────────────────────────────────────────
   raregeneai:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     volumes:
-      - ../data:/app/data
-      - ../models:/app/models
+      - ../data:/app/data:ro
+      - ../models:/app/models:ro
       - ./output:/app/output
     environment:
       - RAREGENEAI_LOG_LEVEL=INFO
+      - RAREGENEAI_DATABASE_URL=postgresql://${POSTGRES_USER:-raregeneai}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-raregeneai}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend
 
-  # Web API
+  # ── Web API ────────────────────────────────────────────────────────────────
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: ["python", "-m", "uvicorn", "raregeneai.ui.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: >
+      python -m uvicorn raregeneai.ui.api:app
+      --host 0.0.0.0 --port 8000
+      --workers 4
+      --limit-concurrency 50
+      --timeout-keep-alive 30
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ../data:/app/data
-      - ../models:/app/models
+      - ../data:/app/data:ro
+      - ../models:/app/models:ro
+    environment:
+      - RAREGENEAI_DATABASE_URL=postgresql://${POSTGRES_USER:-raregeneai}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-raregeneai}
+      - RAREGENEAI_SECRET_KEY=${RAREGENEAI_SECRET_KEY:?Set RAREGENEAI_SECRET_KEY in .env}
+      - RAREGENEAI_ENCRYPTION_KEY=${RAREGENEAI_ENCRYPTION_KEY:?Set RAREGENEAI_ENCRYPTION_KEY in .env}
+      - RAREGENEAI_ALLOWED_ORIGINS=${RAREGENEAI_ALLOWED_ORIGINS:-http://localhost:8501}
+      - RAREGENEAI_ENABLE_DOCS=${RAREGENEAI_ENABLE_DOCS:-false}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+    networks:
+      - backend
+      - frontend
 
-  # Streamlit UI
+  # ── Streamlit UI ───────────────────────────────────────────────────────────
   ui:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    command: ["python", "-m", "streamlit", "run", "raregeneai/ui/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    command: >
+      python -m streamlit run raregeneai/ui/app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.maxUploadSize=500
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     volumes:
-      - ../data:/app/data
-      - ../models:/app/models
+      - ../data:/app/data:ro
+      - ../models:/app/models:ro
+    environment:
+      - RAREGENEAI_API_URL=http://api:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+    networks:
+      - frontend
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  backend:
+    driver: bridge
+  frontend:
+    driver: bridge

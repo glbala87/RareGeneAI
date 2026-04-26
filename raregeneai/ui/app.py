@@ -1,16 +1,21 @@
 """RareGeneAI Streamlit Web Interface.
 
 Provides interactive UI for:
-  - VCF file upload
+  - User authentication (login required)
+  - VCF file upload with validation
   - HPO term entry with auto-complete
   - Gene ranking visualization
   - Interactive filtering and exploration
+
+All file uploads use SecureTempFile for HIPAA-compliant temp handling.
 """
 
 from __future__ import annotations
 
 import json
-import tempfile
+import os
+import re
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -22,10 +27,149 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Constants ────────────────────────────────────────────────────────────────
 
-def main():
+_API_URL = os.environ.get("RAREGENEAI_API_URL", "http://localhost:8000")
+_HPO_PATTERN = re.compile(r"^HP:\d{7}$")
+_PATIENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-\.]{1,128}$")
+_SESSION_TIMEOUT_SECONDS = int(os.environ.get("RAREGENEAI_SESSION_TIMEOUT", "3600"))  # 1 hour
+
+
+# ── Authentication ───────────────────────────────────────────────────────────
+
+def _login_form():
+    """Display login form and authenticate via API."""
     st.title("🧬 RareGeneAI")
     st.markdown("**Rare Disease Gene Prioritization System**")
+    st.markdown("---")
+    st.subheader("🔐 Login Required")
+
+    if st.session_state.pop("_session_expired", False):
+        st.warning("Your session has expired. Please log in again.")
+
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login", use_container_width=True)
+
+    if submitted:
+        if not username or not password:
+            st.error("Please enter username and password.")
+            return
+
+        try:
+            import httpx
+            response = httpx.post(
+                f"{_API_URL}/auth/token",
+                data={"username": username, "password": password},
+                timeout=30,
+            )
+            if response.status_code == 200:
+                token_data = response.json()
+                st.session_state["auth_token"] = token_data["access_token"]
+                st.session_state["username"] = username
+                st.session_state["_last_activity"] = time.time()
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+        except httpx.ConnectError:
+            st.error(f"Cannot connect to API at {_API_URL}. Is the API server running?")
+        except Exception as e:
+            st.error(f"Authentication failed: {e}")
+
+
+def _is_authenticated() -> bool:
+    """Check if user has a valid, non-expired auth token."""
+    if "auth_token" not in st.session_state or not st.session_state["auth_token"]:
+        return False
+
+    # Check session timeout (inactivity-based)
+    last_activity = st.session_state.get("_last_activity", 0)
+    if time.time() - last_activity > _SESSION_TIMEOUT_SECONDS:
+        _logout(expired=True)
+        return False
+
+    # Check JWT expiry
+    try:
+        from jose import jwt
+        payload = jwt.get_unverified_claims(st.session_state["auth_token"])
+        exp = payload.get("exp")
+        if exp and time.time() > exp:
+            _logout(expired=True)
+            return False
+    except Exception:
+        _logout(expired=True)
+        return False
+
+    # Update activity timestamp
+    st.session_state["_last_activity"] = time.time()
+    return True
+
+
+def _logout(expired: bool = False):
+    """Clear authentication state."""
+    for key in ["auth_token", "username", "report", "_last_activity"]:
+        st.session_state.pop(key, None)
+    if expired:
+        st.session_state["_session_expired"] = True
+    st.rerun()
+
+
+# ── Input validation ─────────────────────────────────────────────────────────
+
+def _validate_patient_id(patient_id: str) -> bool:
+    return bool(_PATIENT_ID_PATTERN.match(patient_id))
+
+
+def _validate_hpo_term(term: str) -> bool:
+    return bool(_HPO_PATTERN.match(term.strip()))
+
+
+# ── Secure temp file helper ──────────────────────────────────────────────────
+
+def _save_upload_secure(upload, suffix: str) -> str | None:
+    """Save an uploaded file to a secure temp location."""
+    if upload is None:
+        return None
+    from raregeneai.security.secure_temp import SecureTempFile
+    stf = SecureTempFile(suffix=suffix, content=upload.getvalue())
+    path = stf.__enter__()
+    # Track for cleanup
+    if "_temp_files" not in st.session_state:
+        st.session_state["_temp_files"] = []
+    st.session_state["_temp_files"].append(stf)
+    return str(path)
+
+
+def _cleanup_temp_files():
+    """Clean up all secure temp files from this session."""
+    for stf in st.session_state.get("_temp_files", []):
+        try:
+            stf._cleanup()
+        except Exception:
+            pass
+    st.session_state["_temp_files"] = []
+
+
+# ── Main app ─────────────────────────────────────────────────────────────────
+
+def main():
+    # Require authentication
+    if not _is_authenticated():
+        _login_form()
+        return
+
+    # ── Header with logout ─────────────────────────────────────
+    header_col1, header_col2 = st.columns([8, 2])
+    with header_col1:
+        st.title("🧬 RareGeneAI")
+        st.markdown("**Rare Disease Gene Prioritization System**")
+    with header_col2:
+        st.markdown(f"Logged in as: **{st.session_state.get('username', '')}**")
+        if st.button("Logout", use_container_width=True):
+            _cleanup_temp_files()
+            _logout()
+
     st.markdown("---")
 
     # ── Sidebar: Configuration ─────────────────────────────────────
@@ -59,10 +203,14 @@ def main():
         vcf_file = st.file_uploader(
             "Upload VCF file",
             type=["vcf", "vcf.gz", "gz"],
-            help="WGS or WES VCF file",
+            help="WGS or WES VCF file (max 500 MB)",
         )
         sample_id = st.text_input("Sample ID (optional)")
         patient_id = st.text_input("Patient ID", value="PATIENT_001")
+
+        # Validate patient ID inline
+        if patient_id and not _validate_patient_id(patient_id):
+            st.warning("Patient ID: letters, numbers, underscore, hyphen, dot only (max 128 chars)")
 
     with col2:
         st.subheader("🏥 Phenotype (HPO Terms)")
@@ -116,16 +264,25 @@ def main():
             ["Auto-detect", "QGP", "GME", "European", "African", "South Asian", "East Asian", "Other"],
         )
 
-    # Combine HPO terms
+    # Combine and validate HPO terms
     hpo_terms = []
+    invalid_terms = []
     if hpo_input:
         for line in hpo_input.strip().split("\n"):
             term = line.strip()
-            if term.startswith("HP:"):
+            if not term:
+                continue
+            if _validate_hpo_term(term):
                 hpo_terms.append(term)
+            else:
+                invalid_terms.append(term)
+
     for name in selected_common:
         hpo_terms.append(common_terms[name])
     hpo_terms = list(set(hpo_terms))
+
+    if invalid_terms:
+        st.warning(f"Invalid HPO terms (expected HP:NNNNNNN): {', '.join(invalid_terms)}")
 
     if hpo_terms:
         st.info(f"**{len(hpo_terms)} HPO terms selected:** {', '.join(hpo_terms)}")
@@ -140,34 +297,29 @@ def main():
         if not hpo_terms:
             st.error("Please enter at least one HPO term.")
             return
+        if patient_id and not _validate_patient_id(patient_id):
+            st.error("Invalid Patient ID format.")
+            return
+
+        # Cleanup any previous temp files
+        _cleanup_temp_files()
 
         with st.spinner("Running RareGeneAI pipeline..."):
             try:
                 from raregeneai.config.settings import PipelineConfig
                 from raregeneai.pipeline.orchestrator import RareGeneAIPipeline
 
-                # Save uploaded VCF to temp
-                with tempfile.NamedTemporaryFile(
-                    suffix=".vcf.gz" if vcf_file.name.endswith(".gz") else ".vcf",
-                    delete=False,
-                ) as tmp:
-                    tmp.write(vcf_file.getvalue())
-                    tmp_vcf_path = tmp.name
-
-                # Save optional files to temp
-                def _save_upload(upload, suffix):
-                    if upload is None:
-                        return None
-                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as t:
-                        t.write(upload.getvalue())
-                        return t.name
-
-                tmp_ped_path = _save_upload(ped_file, ".ped")
-                tmp_sv_path = _save_upload(sv_vcf_file, ".vcf")
-                tmp_father_path = _save_upload(father_vcf_file, ".vcf")
-                tmp_mother_path = _save_upload(mother_vcf_file, ".vcf")
-                tmp_expr_path = _save_upload(expression_file, ".tsv")
-                tmp_meth_path = _save_upload(methylation_file, ".tsv")
+                # Save uploaded files using secure temp
+                tmp_vcf_path = _save_upload_secure(
+                    vcf_file,
+                    ".vcf.gz" if vcf_file.name.endswith(".gz") else ".vcf",
+                )
+                tmp_ped_path = _save_upload_secure(ped_file, ".ped")
+                tmp_sv_path = _save_upload_secure(sv_vcf_file, ".vcf")
+                tmp_father_path = _save_upload_secure(father_vcf_file, ".vcf")
+                tmp_mother_path = _save_upload_secure(mother_vcf_file, ".vcf")
+                tmp_expr_path = _save_upload_secure(expression_file, ".tsv")
+                tmp_meth_path = _save_upload_secure(methylation_file, ".tsv")
 
                 # Build config
                 config = PipelineConfig()
@@ -204,9 +356,9 @@ def main():
                 st.success(f"Analysis complete! {len(report.ranked_genes)} genes ranked.")
 
             except Exception as e:
-                st.error(f"Pipeline error: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
+                st.error(f"Pipeline error: {e}")
+            finally:
+                _cleanup_temp_files()
 
     # ── Display Results ────────────────────────────────────────────
     if "report" in st.session_state:

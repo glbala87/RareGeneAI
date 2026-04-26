@@ -17,3 +17,8 @@ data/feedback/
 models/registry/
 .env
 *.log
+*.db
+*.db-shm
+*.db-wal
+.coverage
+raregeneai_secure/
